@@ -176,6 +176,8 @@
             border-radius: 20px;
             width: 400px;
             position: relative;
+            max-height: 80vh;
+            overflow-y: auto;
         }
         
         .close {
@@ -226,9 +228,78 @@
             border-radius: 5px;
             display: none;
         }
+
+        /* Новые стили для камеры */
+        #camera-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        #camera-modal.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        #camera-modal .modal-content {
+            background-color: #000;
+            padding: 0;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 400px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #camera-video {
+            width: 100%;
+            max-height: 60vh;
+            border-radius: 10px 10px 0 0;
+        }
+
+        #camera-controls {
+            padding: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: space-around;
+            background-color: #333;
+            border-radius: 0 0 10px 10px;
+        }
+
+        #capture-photo {
+            background-color: #ffd700;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #close-camera {
+            background-color: #ff0000;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
 </style>
     <!-- Добавляем Tesseract.js для OCR распознавания текста -->
     <script src='https://unpkg.com/tesseract.js@v4.1.1/dist/tesseract.min.js'></script>
+    <!-- Добавляем jsQR для сканирования QR-кодов -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   </head>
   <body>
     <div id="login-page">
@@ -298,6 +369,17 @@
 	  </div>
     </div>
 
+    <!-- Новый модал для камеры -->
+    <div id="camera-modal" class="modal">
+	  <div class="modal-content">
+		<video id="camera-video" autoplay playsinline></video>
+		<div id="camera-controls">
+		  <button id="capture-photo">Сделать фото</button>
+		  <button id="close-camera">Закрыть</button>
+		</div>
+	  </div>
+    </div>
+
 <script>
         // Load data from localStorage
         let todayRuns = parseInt(localStorage.getItem('todayRuns')) || 0;
@@ -334,7 +416,7 @@
                 const item = document.createElement('div');
                 item.className = 'scooter-item';
                 item.innerHTML = `
-                    <img src="scooter.jpg"alt="Scooter">
+                    <img src="scooter.png" alt="Scooter">
                     <span>${scooter.number}</span>
                     <button class="button yellow-button" onclick="finishScooter(${index})">Завершить</button>
                 `;
@@ -387,43 +469,150 @@
             document.getElementById('modal').classList.remove('show');
         });
         
-        // Camera scan functionality
-        document.getElementById('camera-button').addEventListener('click', () => {
-            const fileInput = document.getElementById('file-input');
-            fileInput.click(); // Открывает камеру на мобильных устройствах (capture="environment")
+        // Input filter for scooter number: only digits allowed, remove others immediately
+        document.getElementById('scooter-number').addEventListener('input', function() {
+            this.value = this.value.replace(/\D/g, ''); // Remove all non-digit characters
         });
+        
+        // Camera scan functionality - updated to open live camera modal
+        let videoStream;
+        let scanning = false;
 
-        document.getElementById('file-input').addEventListener('change', async (event) => {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const error = document.getElementById('error-message');
-            const processing = document.getElementById('processing-message');
-            processing.style.display = 'block'; // Показываем сообщение "Обработка фото..."
+        document.getElementById('camera-button').addEventListener('click', async () => {
+            const cameraModal = document.getElementById('camera-modal');
+            const video = document.getElementById('camera-video');
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
 
             try {
-                // Используем Tesseract.js для OCR с настройками для цифр
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' } // Задняя камера для мобильных
+                });
+                video.srcObject = videoStream;
+                cameraModal.classList.add('show');
+                scanning = true;
+                scanQRCode();
+            } catch (err) {
+                console.error('Ошибка доступа к камере:', err);
+                const error = document.getElementById('error-message');
+                error.textContent = 'Не удалось открыть камеру. Проверьте разрешения.';
+                error.classList.add('show');
+                setTimeout(() => {
+                    error.classList.remove('show');
+                }, 3000);
+            }
+
+            function scanQRCode() {
+                if (!scanning) return;
+
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+                    if (code) {
+                        const qrText = code.data;
+                        const match = qrText.match(/\d{6}/); // Предполагаем, что QR содержит 6 цифр
+                        if (match) {
+                            document.getElementById('scooter-number').value = match[0];
+                            stopCamera();
+                            return;
+                        }
+                    }
+                }
+
+                requestAnimationFrame(scanQRCode);
+            }
+        });
+
+        // Capture photo button
+        document.getElementById('capture-photo').addEventListener('click', () => {
+            const video = document.getElementById('camera-video');
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            canvas.toBlob(async (blob) => {
+                const file = new File([blob], 'captured.jpg', { type: 'image/jpeg' });
+                await processImage(file);
+                stopCamera();
+            });
+        });
+
+        // Close camera modal
+        document.getElementById('close-camera').addEventListener('click', () => {
+            stopCamera();
+        });
+
+        function stopCamera() {
+            scanning = false;
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+            }
+            document.getElementById('camera-modal').classList.remove('show');
+        }
+
+        // Process image for OCR (fallback if QR not found)
+        async function processImage(file) {
+            const processing = document.getElementById('processing-message');
+            processing.style.display = 'block';
+
+            try {
+                // Сначала попробуем QR на захваченном изображении
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+                img.onload = () => {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+                    if (code) {
+                        const qrText = code.data;
+                        const match = qrText.match(/\d{6}/);
+                        if (match) {
+                            document.getElementById('scooter-number').value = match[0];
+                            processing.style.display = 'none';
+                            return;
+                        }
+                    }
+
+                    // Если QR не найден, переходим к OCR
+                    performOCR(file);
+                };
+                img.src = URL.createObjectURL(file);
+            } catch (err) {
+                performOCR(file);
+            }
+        }
+
+        async function performOCR(file) {
+            const processing = document.getElementById('processing-message');
+            const error = document.getElementById('error-message');
+
+            try {
                 const { data: { text } } = await Tesseract.recognize(file, 'eng', {
-                    tessedit_char_whitelist: '0123456789', // Только цифры для лучшего распознавания
-                    tessedit_pageseg_mode: '6', // Режим для блоков текста (лучше для номеров)
-                    logger: m => console.log(m) // Логи для отладки
+                    tessedit_char_whitelist: '0123456789',
+                    tessedit_pageseg_mode: '6',
+                    logger: m => console.log(m)
                 });
 
-                // Очищаем текст от пробелов и ищем последовательные цифры
-                const cleanedText = text.replace(/\s+/g, ''); // Убираем пробелы
-                const match = cleanedText.match(/\d{6}/); // Ищем 6 цифр подряд
+                const cleanedText = text.replace(/\s+/g, '');
+                const match = cleanedText.match(/\d{6}/);
 
                 if (match) {
-                    const number = match[0];
-                    document.getElementById('scooter-number').value = number; // Сразу вводим в поле
-                    processing.style.display = 'none'; // Скрываем сообщение обработки
-                    // Не показываем баннер успеха, чтобы не отвлекать — номер уже введен
+                    document.getElementById('scooter-number').value = match[0];
+                    processing.style.display = 'none';
                 } else {
-                    // Если не найдено 6 цифр, попробуем найти любые цифры и ввести первые 6
                     const allDigits = cleanedText.match(/\d/g);
                     if (allDigits && allDigits.length >= 6) {
-                        const number = allDigits.slice(0, 6).join('');
-                        document.getElementById('scooter-number').value = number; // Вводим первые 6 цифр
+                        document.getElementById('scooter-number').value = allDigits.slice(0, 6).join('');
                         processing.style.display = 'none';
                     } else {
                         processing.style.display = 'none';
@@ -443,8 +632,13 @@
                 }, 3000);
                 console.error('OCR Error:', err);
             }
+        }
 
-            // Очищаем input
+        // Fallback for old file input (if needed)
+        document.getElementById('file-input').addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            await processImage(file);
             event.target.value = '';
         });
         
@@ -467,7 +661,7 @@
             byn += 0.68;
             localStorage.setItem('todayRuns', todayRuns);
             localStorage.setItem('tenDayRuns', tenDayRuns);
-            localStorage.setItem('byn', byn.toFixed(2)); // Сохраняем с точностью
+            localStorage.setItem('byn', byn.toFixed(2));
             localStorage.setItem('scooters', JSON.stringify(scooters));
             document.getElementById('today-runs').textContent = todayRuns;
             document.getElementById('ten-day-runs').textContent = tenDayRuns;
